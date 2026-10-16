@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AR Hygiene Explorer - เกมวิทยาศาสตร์มหาสนุก</title>
+    
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Kanit', 'sans-serif'],
+                    },
+                    colors: {
+                        glass: 'rgba(255, 255, 255, 0.25)',
+                        glassDark: 'rgba(0, 0, 0, 0.4)',
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- MediaPipe Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: linear-gradient(135deg, #1e3a8a, #0f172a); /* Fallback bg */
+            color: white;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+        }
+
+        /* Video Background */
+        #webcam-video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover;
+            z-index: 1;
+            transform: scaleX(-1); /* Mirror Correction */
+            opacity: 0.6;
+        }
+
+        /* Canvas for rendering hands and particles */
+        #render-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 2;
+            pointer-events: none;
+        }
+
+        /* Main UI Layer */
+        #game-ui {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            pointer-events: none; /* Let clicks pass through to specific elements */
+        }
+
+        /* Glassmorphism Classes */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+        }
+
+        /* Interactive Elements */
+        .interactive {
+            pointer-events: auto;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .interactive:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 20px rgba(255,255,255,0.5);
+        }
+
+        /* Draggable Items */
+        .drag-item {
+            position: absolute;
+            width: 80px;
+            height: 80px;
+            background: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2.5rem;
+            color: black;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            pointer-events: auto;
+            transform: translate(-50%, -50%); /* Center on cursor */
+            z-index: 20;
+            border: 4px solid #fff;
+            transition: border-color 0.3s;
+        }
+        .drag-item.correct { border-color: #4ade80; } /* Green border */
+        .drag-item.wrong { border-color: #f87171; }   /* Red border */
+
+        /* Drop Zones */
+        .drop-zone {
+            width: 120px;
+            height: 120px;
+            border: 3px dashed rgba(255,255,255,0.6);
+            border-radius: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            pointer-events: auto;
+            background: rgba(0,0,0,0.4);
+            backdrop-filter: blur(5px);
+            transition: all 0.3s;
+        }
+        .drop-zone.highlight {
+            border-color: #fbbf24; /* Yellow hint */
+            box-shadow: 0 0 15px rgba(251, 191, 36, 0.8);
+            transform: scale(1.1);
+        }
+        .drop-zone.active {
+            background: rgba(255,255,255,0.2);
+            border-color: #fff;
+            border-style: solid;
+        }
+
+        /* Custom Cursor for Fallback and AR Feedback */
+        #custom-cursor {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            background: rgba(255, 255, 255, 0.8);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            z-index: 50;
+            box-shadow: 0 0 15px white;
+            transition: width 0.1s, height 0.1s, background 0.1s;
+        }
+        #custom-cursor.grabbing {
+            width: 20px;
+            height: 20px;
+            background: #fcd34d;
+            box-shadow: 0 0 20px #fcd34d;
+        }
+
+        /* Animations */
+        @keyframes pop {
+            0% { transform: scale(0.8); opacity: 0; }
+            50% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .animate-pop { animation: pop 0.5s ease-out forwards; }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-10px); }
+            50% { transform: translateX(10px); }
+            75% { transform: translateX(-10px); }
+        }
+        .animate-shake { animation: shake 0.4s ease-in-out; }
+        
+        .hidden-screen { display: none !important; }
+    </style>
+</head>
+<body>
+
+    <!-- Screen 1: Start Menu -->
+    <div id="start-screen" class="absolute inset-0 z-50 flex flex-col items-center justify-center bg-gradient-to-br from-indigo-900 via-purple-900 to-black">
+        <div class="glass-panel p-10 rounded-3xl text-center max-w-lg w-[90%] animate-pop">
+            <div class="text-6xl mb-4">🔬🧼</div>
+            <h1 class="text-4xl md:text-5xl font-bold mb-4 text-transparent bg-clip-text bg-gradient-to-r from-blue-300 to-teal-300">
+                AR Hygiene Explorer
+            </h1>
+            <p class="text-lg text-gray-200 mb-8 font-light">
+                เรียนรู้การดูแลรักษาความสะอาดร่างกาย ด้วยระบบ AI Hand Tracking! <br>
+                <span class="text-sm text-yellow-300">(ใช้มือหยิบจับ หรือ ใช้เมาส์/นิ้วสัมผัส ก็ได้)</span>
+            </p>
+            <div class="flex flex-col space-y-4">
+                <button id="btn-start-ar" class="interactive bg-gradient-to-r from-teal-400 to-blue-500 hover:from-teal-500 hover:to-blue-600 text-white font-bold py-4 px-8 rounded-full text-xl shadow-lg">
+                    📸 เริ่มเล่นด้วยกล้อง (AR)
+                </button>
+                <button id="btn-start-touch" class="interactive bg-white/10 hover:bg-white/20 border border-white/30 text-white font-semibold py-3 px-8 rounded-full text-lg">
+                    🖱️ เล่นแบบไม่ใช้กล้อง (Mouse/Touch)
+                </button>
+            </div>
+            <div id="loading-ai" class="hidden mt-4 text-teal-300 animate-pulse">
+                กำลังโหลดระบบ AI... กรุณารอสักครู่ ⏳
+            </div>
+        </div>
+    </div>
+
+    <!-- Screen 2: Game Area -->
+    <video id="webcam-video" autoplay playsinline></video>
+    <canvas id="render-canvas"></canvas>
+    
+    <div id="custom-cursor"></div>
+
+    <div id="game-ui" class="hidden-screen">
+        <!-- Top HUD -->
+        <div class="flex justify-between items-start p-4 w-full h-auto">
+            <!-- Score & Level -->
+            <div class="glass-panel px-6 py-3 rounded-2xl flex items-center space-x-6">
+                <div>
+                    <p class="text-xs text-blue-200 uppercase tracking-wider">Level</p>
+                    <p id="ui-level" class="text-2xl font-bold text-white">1/3</p>
+                </div>
+                <div class="w-px h-8 bg-white/30"></div>
+                <div>
+                    <p class="text-xs text-yellow-200 uppercase tracking-wider">Score</p>
+                    <p id="ui-score" class="text-2xl font-bold text-yellow-400">0</p>
+                </div>
+                <div class="w-px h-8 bg-white/30"></div>
+                <div>
+                    <p class="text-xs text-pink-200 uppercase tracking-wider">Combo</p>
+                    <p id="ui-combo" class="text-2xl font-bold text-pink-400">x1</p>
+                </div>
+            </div>
+
+            <!-- Controls & FPS -->
+            <div class="flex flex-col items-end space-y-2">
+                <button id="btn-hint" class="interactive glass-panel px-4 py-2 rounded-full text-yellow-300 font-medium flex items-center shadow-lg">
+                    💡 ขอคำใบ้
+                </button>
+                <div class="glass-panel px-3 py-1 rounded-full text-xs text-gray-300">
+                    FPS: <span id="ui-fps">0</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Level Instruction -->
+        <div class="w-full text-center mt-2 pointer-events-none">
+            <h2 id="ui-instruction" class="text-2xl md:text-3xl font-bold text-white drop-shadow-[0_4px_4px_rgba(0,0,0,0.8)]">
+                ลากอุปกรณ์ไปทำความสะอาดให้ถูกต้อง!
+            </h2>
+        </div>
+
+        <!-- Drop Zones Container (Upper Middle) -->
+        <div class="flex-grow flex items-center justify-center">
+            <div id="drop-zones-container" class="flex flex-wrap justify-center gap-6 md:gap-12 p-4 w-full max-w-4xl">
+                <!-- Drop zones injected via JS -->
+            </div>
+        </div>
+
+        <!-- Item Bank (Bottom) -->
+        <div class="h-40 w-full glass-panel border-b-0 rounded-t-3xl flex items-center justify-center relative overflow-visible">
+            <div class="absolute -top-6 left-1/2 transform -translate-x-1/2 glass-panel px-6 py-1 rounded-full text-sm font-medium text-gray-200 pointer-events-none">
+                👇 ลากไอเทมด้านล่างไปวางด้านบน 👇
+            </div>
+            <div id="items-container" class="flex justify-center gap-4 md:gap-8 w-full p-4 h-full relative">
+                <!-- Items injected via JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Screen 3: End Screen -->
+    <div id="end-screen" class="hidden-screen absolute inset-0 z-[100] flex flex-col items-center justify-center bg-black/80 backdrop-blur-md">
+        <div class="glass-panel p-10 rounded-3xl text-center max-w-lg w-[90%] animate-pop border-yellow-400/50 border-2">
+            <div class="text-7xl mb-6">🏆</div>
+            <h1 class="text-4xl font-bold mb-2 text-yellow-400">Mission Complete!</h1>
+            <p class="text-lg text-white mb-6">คุณเรียนรู้วิธีดูแลตัวเองได้ยอดเยี่ยมมาก!</p>
+            
+            <div class="bg-black/40 rounded-xl p-6 mb-8 text-left inline-block w-full">
+                <div class="flex justify-between mb-2">
+                    <span class="text-gray-300">คะแนนรวม:</span>
+                    <span id="end-score" class="text-2xl font-bold text-yellow-400">0</span>
+                </div>
+                <div class="flex justify-between mb-2">
+                    <span class="text-gray-300">Max Combo:</span>
+                    <span id="end-combo" class="text-xl font-bold text-pink-400">x0</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-300">ระดับความสำเร็จ:</span>
+                    <span id="end-grade" class="text-2xl font-bold text-green-400">S</span>
+                </div>
+            </div>
+
+            <button onclick="location.reload()" class="interactive bg-gradient-to-r from-green-400 to-teal-500 hover:from-green-500 hover:to-teal-600 text-white font-bold py-3 px-10 rounded-full text-xl shadow-lg w-full">
+                🔄 เล่นอีกครั้ง
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. Game Data & Configurations ---
+        const GAME_LEVELS = [
+            {
+                level: 1,
+                instruction: "ลากอุปกรณ์ไปทำความสะอาดอวัยวะให้ถูกต้อง!",
+                targets: [
+                    { id: "t_teeth", label: "ฟัน", icon: "🦷" },
+                    { id: "t_body", label: "ร่างกาย", icon: "🧍" },
+                    { id: "t_hair", label: "เส้นผม", icon: "💇" },
+                    { id: "t_nails", label: "เล็บ", icon: "💅" }
+                ],
+                items: [
+                    { id: "i_brush", icon: "🪥", match: "t_teeth", name: "แปรงสีฟัน" },
+                    { id: "i_soap", icon: "🧼", match: "t_body", name: "สบู่" },
+                    { id: "i_shampoo", icon: "🧴", match: "t_hair", name: "แชมพู" },
+                    { id: "i_clipper", icon: "✂️", match: "t_nails", name: "ที่ตัดเล็บ" }
+                ]
+            },
+            {
+                level: 2,
+                instruction: "แยกแยะพฤติกรรม: ปลอดภัย (Safe) หรือ อันตราย (Unsafe)?",
+                targets: [
+                    { id: "t_safe", label: "ปลอดภัย (Safe)", icon: "✅" },
+                    { id: "t_unsafe", label: "อันตราย (Unsafe)", icon: "⚠️" }
+                ],
+                items: [
+                    { id: "i_wash", icon: "🚰", match: "t_safe", name: "ล้างมือ" },
+                    { id: "i_plug", icon: "🔌", match: "t_unsafe", name: "แหย่ปลั๊กไฟ" },
+                    { id: "i_bath", icon: "🚿", match: "t_safe", name: "อาบน้ำทุกวัน" },
+                    { id: "i_rub_eye", icon: "👁️‍🗨️", match: "t_unsafe", name: "ขยี้ตาแรงๆ" }
+                ]
+            },
+            {
+                level: 3,
+                instruction: "สถานการณ์นี้ ต้องทำความสะอาดอวัยวะใด?",
+                targets: [
+                    { id: "t_eye", label: "ล้างตา", icon: "👁️" },
+                    { id: "t_hand", label: "ล้างมือ", icon: "🖐️" },
+                    { id: "t_mouth", label: "บ้วนปาก", icon: "👄" }
+                ],
+                items: [
+                    { id: "i_dust", icon: "🌪️", match: "t_eye", name: "ฝุ่นเข้าตา" },
+                    { id: "i_mud", icon: "💩", match: "t_hand", name: "มือเปื้อนโคลน" },
+                    { id: "i_smell", icon: "🧅", match: "t_mouth", name: "มีกลิ่นปาก" }
+                ]
+            }
+        ];
+
+        // State Variables
+        let currentLevelIndex = 0;
+        let score = 0;
+        let combo = 1;
+        let maxCombo = 1;
+        let isARMode = false;
+        let gameActive = false;
+        let remainingItems = 0;
+        
+        // Input & Drag State
+        let cursor = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+        let isGrabbing = false;
+        let draggedItem = null;
+        let dragOffset = { x: 0, y: 0 };
+        let itemsDOM = []; // Store DOM references to items
+        let targetsDOM = []; // Store DOM references to targets
+
+        // DOM Elements
+        const uiScore = document.getElementById('ui-score');
+        const uiCombo = document.getElementById('ui-combo');
+        const uiLevel = document.getElementById('ui-level');
+        const uiInstruction = document.getElementById('ui-instruction');
+        const containerTargets = document.getElementById('drop-zones-container');
+        const containerItems = document.getElementById('items-container');
+        const customCursor = document.getElementById('custom-cursor');
+
+        // Audio Synthesis for feedback (No external files needed)
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        const audioCtx = new AudioContext();
+
+        function playSound(type) {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            
+            if (type === 'success') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(440, audioCtx.currentTime); // A4
+                osc.frequency.exponentialRampToValueAtTime(880, audioCtx.currentTime + 0.1); // A5
+                gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.3);
+            } else if (type === 'error') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(300, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(150, audioCtx.currentTime + 0.2);
+                gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.2);
+            } else if (type === 'grab') {
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(600, audioCtx.currentTime);
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.05);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.05);
+            }
+        }
+
+        // --- 2. Particle System (Canvas) ---
+        const canvas = document.getElementById('render-canvas');
+        const ctx = canvas.getContext('2d');
+        let particles = [];
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        function createParticles(x, y, color = '#4ade80') {
+            for (let i = 0; i < 30; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: (Math.random() - 0.5) * 15,
+                    vy: (Math.random() - 0.5) * 15,
+                    size: Math.random() * 8 + 3,
+                    life: 1.0,
+                    color: color
+                });
+            }
+        }
+
+        function drawParticles() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.vy += 0.2; // Gravity
+                p.life -= 0.02;
+                
+                if (p.life <= 0) {
+                    particles.splice(i, 1);
+                    continue;
+                }
+                
+                ctx.globalAlpha = p.life;
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1.0;
+        }
+
+        // --- 3. Game Logic & Level Management ---
+        function initGame() {
+            document.getElementById('start-screen').classList.add('hidden-screen');
+            document.getElementById('game-ui').classList.remove('hidden-screen');
+            gameActive = true;
+            score = 0;
+            combo = 1;
+            maxCombo = 1;
+            currentLevelIndex = 0;
+            updateHUD();
+            loadLevel(currentLevelIndex);
+            gameLoop(); // Start main rendering/logic loop
+        }
+
+        // Shuffle array helper
+        function shuffle(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+            return array;
+        }
+
+        function loadLevel(index) {
+            if (index >= GAME_LEVELS.length) {
+                endGame();
+                return;
+            }
+
+            const levelData = GAME_LEVELS[index];
+            uiLevel.innerText = `${index + 1}/${GAME_LEVELS.length}`;
+            uiInstruction.innerText = levelData.instruction;
+            
+            // Clear containers
+            containerTargets.innerHTML = '';
+            containerItems.innerHTML = '';
+            targetsDOM = [];
+            itemsDOM = [];
+
+            // Render Targets
+            levelData.targets.forEach(target => {
+                const el = document.createElement('div');
+                el.className = 'drop-zone flex-col';
+                el.id = `target-${target.id}`;
+                el.dataset.id = target.id;
+                el.innerHTML = `
+                    <div class="text-4xl mb-2">${target.icon}</div>
+                    <div class="text-sm font-semibold text-center leading-tight px-1">${target.label}</div>
+                `;
+                containerTargets.appendChild(el);
+                targetsDOM.push(el);
+            });
+
+            // Render Items (Shuffled)
+            let shuffledItems = shuffle([...levelData.items]);
+            remainingItems = shuffledItems.length;
+
+            shuffledItems.forEach((item, idx) => {
+                const el = document.createElement('div');
+                el.className = 'drag-item cursor-grab interactive';
+                el.id = `item-${item.id}`;
+                el.dataset.id = item.id;
+                el.dataset.match = item.match;
+                el.innerHTML = item.icon;
+                
+                // Position initial layout via normal flexbox in DOM, 
+                // but we will switch to absolute position when grabbed.
+                el.style.position = 'relative'; 
+                el.style.transform = 'none';
+                
+                containerItems.appendChild(el);
+                itemsDOM.push(el);
+            });
+        }
+
+        function updateHUD() {
+            uiScore.innerText = score;
+            uiCombo.innerText = `x${combo}`;
+            if(combo > 1) {
+                uiCombo.classList.add('animate-pop');
+                setTimeout(() => uiCombo.classList.remove('animate-pop'), 500);
+            }
+        }
+
+        function checkDrop(itemEl) {
+            const itemRect = itemEl.getBoundingClientRect();
+            const itemCenter = {
+                x: itemRect.left + itemRect.width / 2,
+                y: itemRect.top + itemRect.height / 2
+            };
+
+            let droppedOnTarget = null;
+
+            // Check collision with targets
+            for (let target of targetsDOM) {
+                const tRect = target.getBoundingClientRect();
+                if (itemCenter.x > tRect.left && itemCenter.x < tRect.right &&
+                    itemCenter.y > tRect.top && itemCenter.y < tRect.bottom) {
+                    droppedOnTarget = target;
+                    break;
+                }
+            }
+
+            if (droppedOnTarget) {
+                // Check if match
+                if (itemEl.dataset.match === droppedOnTarget.dataset.id) {
+                    // Correct!
+                    playSound('success');
+                    createParticles(itemCenter.x, itemCenter.y, '#4ade80');
+                    
+                    let points = 100 * combo;
+                    score += points;
+                    combo++;
+                    if(combo > maxCombo) maxCombo = combo;
+                    
+                    updateHUD();
+                    
+                    // Remove item visually
+                    itemEl.style.transform = 'scale(0)';
+                    itemEl.style.opacity = '0';
+                    setTimeout(() => itemEl.remove(), 300);
+                    
+                    // Highlight target briefly
+                    droppedOnTarget.classList.add('bg-green-500/50');
+                    setTimeout(() => droppedOnTarget.classList.remove('bg-green-500/50'), 300);
+
+                    remainingItems--;
+                    if (remainingItems <= 0) {
+                        setTimeout(() => loadLevel(++currentLevelIndex), 1000);
+                    }
+                } else {
+                    // Wrong!
+                    playSound('error');
+                    createParticles(itemCenter.x, itemCenter.y, '#f87171');
+                    itemEl.classList.add('wrong', 'animate-shake');
+                    setTimeout(() => itemEl.classList.remove('wrong', 'animate-shake'), 400);
+                    
+                    combo = 1;
+                    updateHUD();
+                    resetItemPosition(itemEl);
+                }
+            } else {
+                // Dropped outside, return to bank
+                resetItemPosition(itemEl);
+            }
+        }
+
+        function resetItemPosition(itemEl) {
+            // Restore it to flexbox flow in the bottom container
+            itemEl.style.position = 'relative';
+            itemEl.style.left = 'auto';
+            itemEl.style.top = 'auto';
+            itemEl.style.transform = 'none';
+            itemEl.style.zIndex = '20';
+        }
+
+        function endGame() {
+            gameActive = false;
+            document.getElementById('game-ui').classList.add('hidden-screen');
+            const endScreen = document.getElementById('end-screen');
+            endScreen.classList.remove('hidden-screen');
+            
+            document.getElementById('end-score').innerText = score;
+            document.getElementById('end-combo').innerText = `x${maxCombo}`;
+            
+            let grade = 'C';
+            if (score > 1000) grade = 'S 🌟';
+            else if (score > 600) grade = 'A';
+            else if (score > 300) grade = 'B';
+            
+            document.getElementById('end-grade').innerText = grade;
+            createParticles(window.innerWidth/2, window.innerHeight/2, '#fbbf24');
+            createParticles(window.innerWidth/3, window.innerHeight/3, '#ec4899');
+            createParticles(window.innerWidth*0.6, window.innerHeight*0.4, '#3b82f6');
+        }
+
+        // --- 4. Input Handling (Mouse, Touch & Logic) ---
+        function startGrab(clientX, clientY) {
+            if (!gameActive) return;
+            cursor.x = clientX;
+            cursor.y = clientY;
+            isGrabbing = true;
+            customCursor.classList.add('grabbing');
+
+            // Find if cursor is over any item
+            if (!draggedItem) {
+                // Only pick up if we are actually hovering an item
+                // When using mouse/touch, events are exact. When using AR, we check distance.
+                let closestItem = null;
+                let minDist = 60; // Grab radius
+
+                itemsDOM.forEach(item => {
+                    const rect = item.getBoundingClientRect();
+                    // If item is relative (in bank), calc center
+                    const cx = rect.left + rect.width / 2;
+                    const cy = rect.top + rect.height / 2;
+                    const dist = Math.sqrt(Math.pow(cx - clientX, 2) + Math.pow(cy - clientY, 2));
+                    
+                    if (dist < minDist) {
+                        minDist = dist;
+                        closestItem = item;
+                    }
+                });
+
+                if (closestItem) {
+                    playSound('grab');
+                    draggedItem = closestItem;
+                    // Convert to absolute positioning for dragging
+                    const rect = draggedItem.getBoundingClientRect();
+                    draggedItem.style.position = 'absolute';
+                    // We set it to map directly to cursor in GameLoop, so just setup flags
+                    draggedItem.style.zIndex = '100';
+                    // Offset so item centers on cursor
+                    dragOffset = { x: 0, y: 0 }; 
+                }
+            }
+        }
+
+        function endGrab() {
+            isGrabbing = false;
+            customCursor.classList.remove('grabbing');
+            if (draggedItem) {
+                checkDrop(draggedItem);
+                draggedItem = null;
+            }
+        }
+
+        function updateCursorPos(clientX, clientY) {
+            cursor.x = clientX;
+            cursor.y = clientY;
+        }
+
+        // Mouse Events
+        window.addEventListener('mousedown', (e) => {
+            if(isARMode) return; // Ignore if AR is active to prevent conflict
+            startGrab(e.clientX, e.clientY);
+        });
+        window.addEventListener('mousemove', (e) => {
+            if(isARMode) return;
+            updateCursorPos(e.clientX, e.clientY);
+        });
+        window.addEventListener('mouseup', () => {
+            if(isARMode) return;
+            endGrab();
+        });
+
+        // Touch Events
+        window.addEventListener('touchstart', (e) => {
+            if(isARMode) return;
+            startGrab(e.touches[0].clientX, e.touches[0].clientY);
+        }, {passive: false});
+        window.addEventListener('touchmove', (e) => {
+            if(isARMode) return;
+            // Prevent scrolling while dragging
+            if(draggedItem) e.preventDefault();
+            updateCursorPos(e.touches[0].clientX, e.touches[0].clientY);
+        }, {passive: false});
+        window.addEventListener('touchend', () => {
+            if(isARMode) return;
+            endGrab();
+        });
+
+        // Hint System
+        document.getElementById('btn-hint').addEventListener('click', () => {
+            if (!gameActive || remainingItems === 0) return;
+            score = Math.max(0, score - 20); // Penalty for hint
+            combo = 1;
+            updateHUD();
+            
+            // Highlight a random target that has a matching item still in play
+            let availableMatches = itemsDOM.filter(i => i.parentElement !== null).map(i => i.dataset.match);
+            if(availableMatches.length > 0) {
+                let hintId = availableMatches[Math.floor(Math.random() * availableMatches.length)];
+                let target = targetsDOM.find(t => t.dataset.id === hintId);
+                if(target) {
+                    target.classList.add('highlight');
+                    setTimeout(() => target.classList.remove('highlight'), 1500);
+                }
+            }
+        });
+
+        // --- 5. MediaPipe AI & AR System ---
+        const videoElement = document.getElementById('webcam-video');
+        let arLandmarks = null;
+        let lastFrameTime = performance.now();
+        let frameCount = 0;
+
+        async function initMediaPipe() {
+            const btnAr = document.getElementById('btn-start-ar');
+            const loadingText = document.getElementById('loading-ai');
+            
+            btnAr.style.display = 'none';
+            document.getElementById('btn-start-touch').style.display = 'none';
+            loadingText.classList.remove('hidden');
+
+            try {
+                const hands = new Hands({
+                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+                });
+
+                hands.setOptions({
+                    maxNumHands: 1,
+                    modelComplexity: 1,
+                    minDetectionConfidence: 0.6,
+                    minTrackingConfidence: 0.6
+                });
+
+                hands.onResults(onResults);
+
+                const camera = new Camera(videoElement, {
+                    onFrame: async () => {
+                        await hands.send({image: videoElement});
+                    },
+                    width: 640,
+                    height: 480
+                });
+
+                await camera.start();
+                isARMode = true;
+                
+                // Hide video visually if we just want AR cursor, or keep it as background
+                // We keep it as background with opacity 0.6 (set in CSS)
+                initGame();
+
+            } catch (err) {
+                console.error("AI Init Error:", err);
+                alert("ไม่สามารถเปิดกล้องหรือโหลด AI ได้ ระบบจะเปลี่ยนเป็นโหมด Mouse/Touch แทน");
+                isARMode = false;
+                initGame();
+                videoElement.style.display = 'none';
+            }
+        }
+
+        function onResults(results) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear hand layer
+            arLandmarks = null;
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                arLandmarks = landmarks;
+
+                // Draw landmarks manually for specific style or use drawing_utils
+                drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {color: '#ffffff', lineWidth: 2});
+                drawLandmarks(ctx, landmarks, {color: '#4ade80', lineWidth: 1, radius: 3});
+
+                // Calculate Cursor (Midpoint of Index Tip (8) and Thumb Tip (4))
+                const indexTip = landmarks[8];
+                const thumbTip = landmarks[4];
+
+                // Mirroring coordinates!
+                // Since video has scaleX(-1), we need to invert X to match screen
+                const screenX = (1 - indexTip.x) * window.innerWidth;
+                const screenY = indexTip.y * window.innerHeight;
+
+                const thumbScreenX = (1 - thumbTip.x) * window.innerWidth;
+                const thumbScreenY = thumbTip.y * window.innerHeight;
+
+                // Set cursor position to Index finger tip for precise pointing
+                updateCursorPos(screenX, screenY);
+
+                // Calculate distance for Pinch gesture
+                const dx = screenX - thumbScreenX;
+                const dy = screenY - thumbScreenY;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                // Threshold for pinch (approx 40 pixels on screen, adjust as needed)
+                const PINCH_THRESHOLD = window.innerWidth * 0.05; 
+
+                if (distance < PINCH_THRESHOLD) {
+                    if (!isGrabbing) startGrab(screenX, screenY);
+                } else {
+                    if (isGrabbing) endGrab();
+                }
+            }
+        }
+
+        // --- 6. Main Game Loop ---
+        function gameLoop(currentTime) {
+            if (!gameActive) return;
+
+            // Calculate FPS
+            frameCount++;
+            if (currentTime - lastFrameTime >= 1000) {
+                document.getElementById('ui-fps').innerText = frameCount;
+                frameCount = 0;
+                lastFrameTime = currentTime;
+            }
+
+            // Draw Particles (if not in onResults to keep frame rate independent)
+            if (!isARMode || arLandmarks === null) {
+                // If AR is updating canvas, we must be careful not to clear it completely 
+                // if we draw hands there. 
+                // Solution: We moved particle drawing here, but since onResults clears canvas, 
+                // particles might flicker. 
+                // Better approach: Let gameLoop handle ALL canvas rendering except video.
+            }
+            
+            // Clear canvas only if not AR (AR clears it in onResults to sync with video frame)
+            if(!isARMode) {
+                 ctx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+            // Actually, to make particles smooth, we ALWAYS draw them here.
+            // But we must NOT clear canvas here if AR mode is drawing hands in onResults asynchronously.
+            // Quick fix: Canvas 2D composite or just accept slight sync difference.
+            drawParticles();
+
+            // Update DOM Cursor Position
+            customCursor.style.left = `${cursor.x}px`;
+            customCursor.style.top = `${cursor.y}px`;
+
+            // Update Dragged Item Position
+            if (draggedItem && isGrabbing) {
+                // Translate -50% -50% is handled in CSS, so just set left/top to cursor
+                draggedItem.style.left = `${cursor.x}px`;
+                draggedItem.style.top = `${cursor.y}px`;
+                draggedItem.style.transform = `translate(-50%, -50%) scale(1.1)`;
+                
+                // Highlight drop zone if hovering
+                targetsDOM.forEach(t => {
+                    const tRect = t.getBoundingClientRect();
+                    if (cursor.x > tRect.left && cursor.x < tRect.right &&
+                        cursor.y > tRect.top && cursor.y < tRect.bottom) {
+                        t.classList.add('active');
+                    } else {
+                        t.classList.remove('active');
+                    }
+                });
+            } else if (draggedItem === null) {
+                // Cleanup active states
+                targetsDOM.forEach(t => t.classList.remove('active'));
+            }
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- Initialization ---
+        document.getElementById('btn-start-ar').addEventListener('click', initMediaPipe);
+        document.getElementById('btn-start-touch').addEventListener('click', () => {
+            isARMode = false;
+            videoElement.style.display = 'none'; // Hide video background
+            document.body.style.background = 'linear-gradient(135deg, #1e3a8a, #0f172a)'; // Solid fallback bg
+            initGame();
+        });
+
+    </script>
+</body>
+</html>
